@@ -1,0 +1,446 @@
+###Programmed in RStudio
+
+#rm(list = ls())
+
+library(gmodels)
+library(e1071) #Supports SVM
+library(GGally)
+library(car)
+
+
+###Data import
+mydata=read.csv("[Airbnb Dataset]")
+
+str(mydata)
+
+mydata$attr_index=NULL
+mydata$attr_index_norm=NULL
+mydata$X=NULL
+mydata$X=NULL
+mydata$rest_index=NULL
+mydata$rest_index_norm=NULL
+
+#Converting categorical predictors to factors
+mydata$room_type=as.factor(mydata$room_type) 
+mydata$room_shared=as.factor(mydata$room_shared)
+mydata$room_private=as.factor(mydata$room_private)
+mydata$host_is_superhost=as.factor(mydata$host_is_superhost)
+mydata$multi=as.factor(mydata$multi)
+mydata$biz=as.factor(mydata$biz)
+mydata$weekend=as.factor(mydata$weekend)
+
+
+###Split into training and testing sets
+options(scipen = 999)
+
+numpredictors=dim(mydata)[2]-1
+
+numfac=0
+
+for (i in 1:numpredictors) {
+  if ((is.factor(mydata[,i]))){
+    numfac=numfac+1} 
+}
+
+nobs=dim(mydata)[1]
+RNGkind(sample.kind = "Rejection")
+set.seed(1) #sets the seed for random sampling
+
+prop = prop.table(table(mydata$myresponse))
+length.vector = round(0.8*nobs*prop)
+train_size=sum(length.vector)
+test_size=nobs-train_size
+class.names = as.data.frame(prop)[,1]
+numb.class = length(class.names)
+resample=1
+
+#This code makes sure that the categorical variables have the same unique levels in both the testing and training sets as in the original data.
+while (resample==1) {
+  
+  train_index = c()
+  
+  for(i in 1:numb.class){
+    index_temp = which(mydata$myresponse==class.names[i])
+    train_index_temp = sample(index_temp, length.vector[i], replace = F)
+    train_index = c(train_index, train_index_temp)
+  }
+  
+  mydata_train=mydata[train_index,] #randomly select the data for training set using the row numbers generated above
+  mydata_test=mydata[-train_index,]#everything not in the training set should go into testing set
+  
+  right_fac=0 #denotes the number of factors with "right" distributions (i.e. - the unique levels match across mydata, test, and train data sets)
+  
+  for (i in 1:numpredictors) {
+    if (is.factor(mydata_train[,i])) {
+      if (setequal(intersect(as.vector(unique(mydata_train[,i])), as.vector(unique(mydata_test[,i]))),as.vector(unique(mydata[,i])))==TRUE)
+        right_fac=right_fac+1
+    }
+  }
+  
+  if (right_fac==numfac) (resample=0) else (resample=1)
+  
+}  
+
+
+###Scale the numeric variables, other than the response
+# Identify numeric and categorical variables
+numeric_vars = sapply(mydata_train, is.numeric)
+categorical_vars = !numeric_vars
+
+#Scale numeric variables in training data
+scaled_numeric_vars = as.data.frame(scale(mydata_train[, numeric_vars]))
+colnames(scaled_numeric_vars) = colnames(mydata_train)[numeric_vars]
+
+#Combine scaled numeric variables and categorical variables in training data
+train_scaled = cbind(scaled_numeric_vars, mydata_train[, categorical_vars])
+
+#Remove response variable from scaled numeric variables
+train_predictors = train_scaled[, !grepl("myresponse", colnames(train_scaled))]
+train_response = mydata_train$myresponse
+
+#Scale numeric variables in test data
+scaled_numeric_vars_test = as.data.frame(scale(mydata_test[, numeric_vars]))
+colnames(scaled_numeric_vars_test) = colnames(mydata_test)[numeric_vars]
+
+#Combine scaled numeric variables and categorical variables in test data
+test_scaled = cbind(scaled_numeric_vars_test, mydata_test[, categorical_vars])
+
+#Remove response variable from scaled numeric variables
+test_predictors = test_scaled[, !grepl("myresponse", colnames(test_scaled))]
+test_response = mydata_test$myresponse
+
+test_predictors$myresponse = mydata_test$myresponse
+train_predictors$myresponse = mydata_train$myresponse
+train_scaled = train_predictors
+test_scaled = test_predictors
+
+#Print dimensions of scaled datasets
+dim(train_scaled)
+dim(test_scaled)
+
+set.seed(1)
+#Takes 10% of training data, otherwise the runtime is too long
+train_scaled = train_scaled[sample(nrow(train_scaled), size = 0.1 * nrow(train_scaled)), ]
+
+
+
+###Exploratory analysis
+library(ggplot2)
+# Density plot for "Price"
+ggplot(data = test_scaled, aes(x = myresponse)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  labs(x = "Price", y = "Density") +
+  ggtitle("Density Plot of Price")
+
+#Shows how scaling has made the variables more uniform
+#Plot density of guest satisfaction overall
+p1 = ggplot(train_scaled, aes(x=guest_satisfaction_overall, fill="Guest Satisfaction")) +
+  geom_density(alpha=.7) +
+  labs(x="Guest Satisfaction Overall", y="Density", fill=NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.85, 0.85))
+
+# Overlay density of bedrooms
+p2 = p1 + 
+  geom_density(aes(x=bedrooms, y=..density.., fill="Bedrooms"), alpha=.7) +
+  labs(title="Density Plot of Guest Satisfaction and Bedrooms") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Display plot
+p2
+
+str(mydata)
+summary(mydata)
+
+#Calculate the correlation coefficient between "person_capacity" and "myresponse"
+correlation = cor(mydata$person_capacity, mydata$myresponse)
+#Create the ggplot with the correlation coefficient in the title
+ggplot(mydata, aes(x = person_capacity, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Person Capacity", y = "Price", 
+       title = paste("(Correlation =", round(correlation, 2), ")")) +
+  xlim(c(2, 6))
+
+
+
+correlation = cor(mydata$cleanliness_rating, mydata$myresponse)
+ggplot(mydata, aes(x = cleanliness_rating, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Cleanliness Rating", y = "Price", 
+       title = paste("(Correlation =", round(correlation, 2), ")"))
+
+
+
+correlation = cor(mydata$guest_satisfaction_overall, mydata$myresponse)
+#Create the ggplot with the correlation coefficient in the title
+ggplot(mydata, aes(x = guest_satisfaction_overall, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Guest Satisfaction Score", y = "Price", 
+       title = paste("(Correlation =", round(correlation, 2), ")"))
+
+
+
+correlation = cor(mydata$bedrooms, mydata$myresponse)
+ggplot(mydata, aes(x = bedrooms, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Bedrooms", y = "Price", 
+       title = paste("Bedrooms vs. Price (Correlation =", round(correlation, 2), ")"))
+
+
+
+correlation = cor(mydata$dist, mydata$myresponse)
+ggplot(mydata, aes(x = dist, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Distance from city center", y = "Price", 
+       title = paste("Distance from city center vs. Price (Correlation =", round(correlation, 2), ")"))
+
+
+
+correlation = cor(mydata$metro_dist, mydata$myresponse)
+ggplot(mydata, aes(x = metro_dist, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Distance from metro", y = "Price", 
+       title = paste("Distance from metro vs. Price (Correlation =", round(correlation, 2), ")"))
+
+
+
+correlation = cor(mydata$lng, mydata$myresponse)
+ggplot(mydata, aes(x = lng, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Longitude", y = "Price", 
+       title = paste("(Correlation =", round(correlation, 2), ")"))
+
+
+correlation = cor(mydata$lat, mydata$myresponse)
+ggplot(mydata, aes(x = lat, y = myresponse)) +
+  geom_point(color = "lightblue", size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Latitude", y = "Price", 
+       title = paste("(Correlation =", round(correlation, 2), ")"))
+
+
+#Simplified explanation of linear kernel. Draws the line that best seperates high and low response variable (price)
+num.vars = unlist(lapply(mydata, is.numeric)) #creates the vector of numeric variables in the data
+ggpairs(mydata[,num.vars]) #plots the distributions, scatterplots (with correlations) of variables in num.vars
+
+#Produces the scatterplot of X1 vs X2, colored by classes of price.
+library(ggplot2)
+colored.scatter = function(X1, X2, mydata, subsample_size = 500) {
+  
+  X1.sc = (X1)
+  X2.sc = (X2)
+  
+  z = data.frame(X1.sc, X2.sc)
+  z$myresponse = mydata$myresponse  # add myresponse column from mydata
+  
+  #subsample the data if there are too many points to plot
+  if (nrow(z) > subsample_size) {
+    z = z[sample(nrow(z), subsample_size), ]
+  }
+  
+  #assign colors based on myresponse variable
+  z$color = ifelse(z$myresponse < 500, "<500", ">=500")
+  
+  #create scatter plot with colored points and x, y start at 0
+  ggplot(z, aes(x = X1.sc, y = X2.sc, color = color)) +
+    geom_point() +
+    scale_color_manual(values = c("black", "red")) +
+    labs(x = "Bedrooms", y = "Lat") +
+    scale_x_continuous(limits = c(0, max(X1.sc)))
+}
+
+colored.scatter(mydata$bedrooms, mydata$person_capacity, mydata)
+
+
+#Update X1 and X2 with the names of predictors of your interest
+colored.scatter(mydata$bedrooms, mydata$dist, mydata)
+
+
+
+###Recursive Feature Elimination (Variable selection)
+library(caret)
+#Turn categorical variables into dummy variables for feature selection
+train_dummy_matrix = predict(dummyVars(~., train_scaled), newdata = train_scaled)
+train_dummy = data.frame(train_dummy_matrix)
+
+train_dummynr = train_dummy[, -which(names(train_dummy) == "myresponse")]
+
+#set up control parameters for RFE
+ctrl = rfeControl(method = "repeatedcv", repeats = 3, verbose = FALSE)
+
+#run RFE to select best features
+set.seed(1)
+svm_rfe = rfe(train_dummynr, train_dummy$myresponse, sizes = c(1:ncol(train_dummynr)), rfeControl = ctrl, method = "svmLinear")
+
+#view results of RFE
+print(svm_rfe$variables)
+
+
+
+
+#Same as above but for SVM with a polynomial kernel, tuning cost and degree of polynomial
+train_scaled$guest_satisfaction=NULL
+train_scaled$cleanliness_rating=NULL
+train_scaled$multi=NULL
+#train_scaled$host_is_superhost=NULL
+#train_scaled$room_shared=NULL
+#train_scaled$weekend=NULL
+
+#Logarithmic scaling of response variable
+train_scaled$myresponse = log(train_scaled$myresponse)
+test_scaled$myresponse = log(test_scaled$myresponse)
+
+
+
+###Attempts SVM with a linear kernel (support vector/soft margin classifier)
+#And tunes the cost parameter based on 10-fold cross-validation
+set.seed(1)
+tune.out.linear=     tune(svm,
+                          myresponse~.,
+                          data=train_scaled,
+                          kernel="linear",
+                          ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+
+my.summary=function(tune.summary, kernel){
+  summ.lin=summary(tune.summary)
+  stop.col=dim(summ.lin$performances)[2]-1
+  performance=summ.lin$performances[1:stop.col]
+  ordered=performance[order(performance$error),]
+  
+  print(list(kernel,performance, "Best performance", ordered[1,]), row.names=F)}
+
+my.summary(tune.out.linear, "Support Vector (Soft Margin) Classifier")
+
+#Generate predictions on the testing set
+pred = predict(tune.out.linear$best.model, newdata = test_scaled)
+
+#Calculate MAPE on testing set
+mape = mean(abs((test_scaled$myresponse - pred) / test_scaled$myresponse))
+print(mape)
+
+
+
+###Polynomial kernel
+set.seed(1)
+tune.out.poly=       tune(svm,
+                          myresponse~.,
+                          data=train_scaled,
+                          kernel="polynomial",
+                          ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100), degree=c(2,3,4,5)),
+                                      tunecontrol = tune.control(cross = 10))
+
+my.summary=function(tune.summary, kernel){
+  summ.lin=summary(tune.summary)
+  stop.col=dim(summ.lin$performances)[2]-1
+  performance=summ.lin$performances[1:stop.col]
+  ordered=performance[order(performance$error),]
+  
+  print(list(kernel,performance, "Best performance", ordered[1,]), row.names=F)}
+
+my.summary(tune.out.poly, "Polynomial")
+
+pred = predict(tune.out.poly$best.model, newdata = test_scaled)
+
+mape = mean(abs((test_scaled$myresponse - pred) / test_scaled$myresponse))
+print(mape)
+
+
+
+###Radial Kernel
+set.seed(1)
+tune.out.radial=     tune(svm,
+                          myresponse~.,
+                          data=train_scaled,
+                          kernel="radial",
+                          ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100), gamma=c(.01,0.5,1,2))
+                          ,tunecontrol = tune.control(cross = 10))
+
+my.summary=function(tune.summary, kernel){
+  summ.lin=summary(tune.summary)
+  stop.col=dim(summ.lin$performances)[2]-1
+  performance=summ.lin$performances[1:stop.col]
+  ordered=performance[order(performance$error),]
+  
+  print(list(kernel,performance, "Best performance", ordered[1,]), row.names=F)}
+
+my.summary(tune.out.radial, "SVM with RBF Kernel")
+
+pred = predict(tune.out.radial$best.model, newdata = test_scaled)
+
+mape = mean(abs((test_scaled$log_response - pred) / test_scaled$log_response))
+print(mape)
+
+
+
+###Residual analysis
+residuals = train_scaled$myresponse - pred
+
+plot(x = pred, y = residuals, main = "Residual Plot", xlab = "Predicted Values", ylab = "Residuals")
+
+hist(residuals, breaks = 20, main = "Residual Histogram", xlab = "Residuals")
+
+qqnorm(residuals)
+qqline(residuals)
+
+###More analysis
+#Create a data frame with actual and predicted values
+df = data.frame(actual = test_scaled$myresponse, predicted = pred)
+
+#Plot a histogram of actual vs. predicted values
+hist(df$actual, col = "blue", main = "Actual vs. Predicted Values", xlab = "Value")
+hist(df$predicted, col = "red", add = TRUE)
+legend("topright", c("Actual", "Predicted"), fill = c("blue", "red"))
+       
+
+#Summary statistics
+actual_mean = round(mean(df$actual), 2)
+predicted_mean = round(mean(df$predicted), 2)
+actual_median = median(df$actual)
+predicted_median = median(df$predicted)
+actual_sd = round(sd(df$actual), 2)
+predicted_sd = round(sd(df$predicted), 2)
+
+print(actual_mean)
+print(predicted_mean)
+print(actual_median)
+print(predicted_median)
+print(actual_sd)
+print(predicted_sd)
+
+library(ggplot2)
+
+# Calculate correlation coefficient
+corr = cor(df$actual, df$predicted)
+
+# Create a scatterplot between "Actual" & "Predicted"
+ggplot(df, aes(x = actual, y = pred)) +
+  geom_point() +
+  labs(x = "Actual", y = "Predicted", title = paste0("Predicted vs. Actual (Correlation: ", round(corr, 2), ")")) +
+  geom_abline(intercept = 0, slope = 1, color = "red") # Add a diagonal line for reference
+
+
+###MAPE & RMSE (price scaled back to original)
+# Scale response variable back
+pred = exp(pred)
+# Calculate MAPE
+mape = mean(abs((test_predictors$myresponse - pred) / test_predictors$myresponse))
+print(mape)
+
+# Calculate RMSE
+rmse = sqrt(mean((test_predictors$myresponse - pred)^2))
+print(rmse)
